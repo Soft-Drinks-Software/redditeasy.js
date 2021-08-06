@@ -1,74 +1,3 @@
-// useless strftime shit ignore
-Date.prototype.strftime = function(format) {
-    const options = {
-        "day_names": ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"],
-        "abbr_day_names": ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"],
-        "month_names": [null,"January","February","March","April","May","June","July","August","September","October","November","December"],
-        "abbr_month_names": [null,"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
-    }
-
-    const date = this;
-
-    if (!options) {
-        return date.toString();
-    }
-
-    options.meridian = options.meridian || ["AM", "PM"];
-
-    const weekDay = date.getDay();
-    const day = date.getDate();
-    const year = date.getFullYear();
-    const month = date.getMonth() + 1;
-    const hour = date.getHours();
-    let hour12 = hour;
-    const meridian = hour > 11 ? 1 : 0;
-    const secs = date.getSeconds();
-    const mins = date.getMinutes();
-    const offset = date.getTimezoneOffset();
-    const absOffsetHours = Math.floor(Math.abs(offset / 60));
-    const absOffsetMinutes = Math.abs(offset) - (absOffsetHours * 60);
-    const timezoneoffset = (offset > 0 ? "-" : "+") + (absOffsetHours.toString().length < 2 ? "0" + absOffsetHours : absOffsetHours) + (absOffsetMinutes.toString().length < 2 ? "0" + absOffsetMinutes : absOffsetMinutes);
-
-    if (hour12 > 12) {
-        hour12 = hour12 - 12;
-    } else if (hour12 === 0) {
-        hour12 = 12;
-    }
-
-    const padding = function (n) {
-        const s = "0" + n.toString();
-        return s.substr(s.length - 2);
-    };
-
-    let f = format;
-    f = f.replace("%a", options.abbr_day_names[weekDay]);
-    f = f.replace("%A", options.day_names[weekDay]);
-    f = f.replace("%b", options.abbr_month_names[month]);
-    f = f.replace("%B", options.month_names[month]);
-    f = f.replace("%d", padding(day));
-    f = f.replace("%-d", day);
-    f = f.replace("%H", padding(hour));
-    f = f.replace("%-H", hour);
-    f = f.replace("%I", padding(hour12));
-    f = f.replace("%-I", hour12);
-    f = f.replace("%m", padding(month));
-    f = f.replace("%-m", month);
-    f = f.replace("%M", padding(mins));
-    f = f.replace("%-M", mins);
-    f = f.replace("%p", options.meridian[meridian]);
-    f = f.replace("%S", padding(secs));
-    f = f.replace("%-S", secs);
-    f = f.replace("%w", weekDay);
-    f = f.replace("%y", padding(year));
-    f = f.replace("%-y", padding(year).replace(/^0+/, ""));
-    f = f.replace("%Y", year);
-    f = f.replace("%z", timezoneoffset);
-
-    return f;
-};
-
-
-// real shit starts here
 class SubredditBase {
     constructor(subreddit, clientId = null, clientSecret = null, userAgent = null) {
         this.subreddit = subreddit
@@ -113,7 +42,7 @@ function getRequest(user_agent, client_id, rtype, slash, rfor) {
 
 function getPost(self, rtype, slash, rfor) {
 
-    const meme = getRequest(self.userAgent, rtype, rfor, slash);
+    const meme = getRequest(self.userAgent, self.clientId, rtype, rfor, slash);
     checkForApiError(meme)
 
     const post = meme["data"]["children"]
@@ -122,9 +51,14 @@ function getPost(self, rtype, slash, rfor) {
     let spoiler;
     let s;
     let media;
-    let updated;
     let randompost;
     let nsfw;
+    let flairPost;
+    let flairAuthor;
+    let contentText;
+    let isMedia;
+    let contentType;
+    let mediaMetadata;
 
     try {
         try {
@@ -145,7 +79,101 @@ function getPost(self, rtype, slash, rfor) {
         spoiler = post[randompost]["data"]["spoiler"]
         s = post[randompost]["data"]["created"]
         media = post[randompost]["data"]["media"]
-        updated = Date.prototype.strftime("%d-%m-%Y %I:%M:%S UTC")
+
+        try {
+            flairAuthor = post[randompost]["data"]["author_flair_text"]
+        } catch (e) {
+            flairAuthor = null
+        }
+
+        try {
+            flairPost = post[randompost]["data"]["link_flair_text"]
+        } catch (e) {
+            flairPost = null
+        }
+
+        try {
+            mediaMetadata = post[randompost]["data"]["media_metadata"]
+        } catch (e) {
+            mediaMetadata = null
+        }
+
+        if (mediaMetadata) {
+            let mediaList = []
+            let galleryData = post[randompost]["data"]["gallery_data"]["items"]
+
+            for (let i in galleryData.length) {
+                mediaList.push({
+                    "id": mediaMetadata.keys(),
+                    "media": mediaMetadata[mediaMetadata.keys()[i]]["s"]["u"],
+                    "caption": galleryData[i]["caption"] ? "caption" in galleryData[i] : null
+                })
+            }
+
+            contentText = {
+                "mediaCount": mediaMetadata.length,
+                "media": mediaList,
+                "fullData": mediaMetadata
+            }
+
+        } else if (media == null) {
+            contentText = post[randompost]["data"]["selftext"]
+            if (contentText === "") {
+                try {
+                    contentText = post[randompost]["data"]["url_overridden_by_dest"]
+                } catch (e) {
+                    contentText = null
+                }
+            }
+        } else if (media) {
+            try {
+                contentText = post[randompost]["data"]["media"]["oembed"]["thumbnail_url"]
+            } catch (e) {
+                contentText = post[randompost]["data"]["secure_media_embed"]["media_domain_url"]
+            }
+        } else {
+            contentText = post[randompost]["data"]["url_overridden_by_dest"]
+        }
+
+        isMedia = !post[randompost]["data"]["domain"].startsWith("self")
+
+        let regexUrl = RegExp("^(?:http|ftp)s?://")
+        let regexUrlImage = RegExp("(?:([^:/?#]+):)?(?://([^/?#]*))?([^?#]*\\.(?:jpg|gif|png))(?:\\?([^#]*))?(?:#(.*))?")
+
+        if (post[randompost]["data"]["media_metadata"]) {
+            contentType = "Gallery"
+        } else if (regexUrlImage.test(contentText)) {
+            contentType = "Image"
+        } else if (post[randompost]["data"]["is_video"]) {
+            contentType = "Video"
+        } else if (regexUrl.test(contentText)) {
+            contentType = "URL"
+        } else {
+            contentType = "Text"
+        }
+
+        return Reddit(
+            this.content = contentText,
+            this.title = post[randompost]["data"]["title"],
+            this.upvoteRatio = post[randompost]["data"]["upvote_ratio"],
+            this.totalAwards = post[randompost]["data"]["total_awards_received"],
+            this.score = post[randompost]["data"]["score"],
+            this.downvotes = post[randompost]["data"]["downs"],
+            this.createdAt = parseInt(s),
+            this.nsfw = nsfw,
+            this.author = post[randompost]["data"]["author"],
+            this.postUrl = `https://reddit.com${post[randompost]['data']['permalink']}`
+                .replace("https://reddit.com/r/u_", " https://reddit.com/u/"),
+            this.stickied = stickied,
+            this.spoiler = spoiler,
+            this.postFlair = flairPost,
+            this.authorFlair = flairAuthor,
+            this.subredditSubscribers = post[randompost]["data"]["subreddit_subscribers"],
+            this.commentCount = post[randompost]["data"]["num_comments"],
+            this.isMedia = isMedia,
+            this.subredditName = post[randompost]["data"]["subreddit"],
+            this.contentType = contentType
+        )
     } catch (e) {
 
     }
